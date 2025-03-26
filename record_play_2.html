@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket 控制面板</title>
+    <style>
+        .status-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: #ccc;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        .connected { background-color: green; }
+        .disconnected { background-color: red; }
+        .active { background-color: green; }
+        .control-group {
+            margin: 15px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        input, button {
+            margin: 5px;
+            padding: 8px;
+        }
+        button:disabled {
+            background-color: #ddd;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="control-group">
+        <input type="text" id="ipInput" placeholder="服务器IP" style="width: 120px;">
+		<!-- 添加默认端口值 -->
+        <input type="text" id="portInput" placeholder="端口" style="width: 80px;" value="50051">
+        <button id="connectBtn" onclick="connect()">连接</button>
+        <button id="disconnectBtn" onclick="disconnect()" disabled>断开</button>
+        <div id="connectionStatus" class="status-indicator"></div>
+    </div>
+
+    <div class="control-group">
+        <input type="text" id="fileNameInput" placeholder="文件名（例如：test）" style="width: 300px;">
+    </div>
+
+    <div class="control-group">
+        <button onclick="sendStartRecord()">开始录制</button>
+        <button onclick="sendStopRecord()">结束录制</button>
+        <div id="recordStatus" class="status-indicator"></div>
+    </div>
+
+    <div class="control-group">
+        <button onclick="sendStartPlay()">开始播放</button>
+        <button onclick="sendStopPlay()">结束播放</button>
+        <div id="playStatus" class="status-indicator"></div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let isConnected = false;
+        let lastRecordAction = null;
+        let lastPlayAction = null;
+		
+		function formatFileName(filename) {
+            if (!filename.endsWith('.spmid')) {
+                return filename + '.spmid';
+            }
+            return filename;
+        }
+		
+        function updateConnectionStatus() {
+			const statusElem = document.getElementById('connectionStatus');
+			statusElem.classList.remove('connected', 'disconnected');
+			statusElem.classList.add(isConnected ? 'connected' : 'disconnected');
+			// 新增连接按钮禁用状态设置
+			document.getElementById('connectBtn').disabled = isConnected;
+			document.getElementById('disconnectBtn').disabled = !isConnected;
+        }
+
+        function connect() {
+            const ip = document.getElementById('ipInput').value;
+            const port = document.getElementById('portInput').value;
+            
+            if (!ip || !port) {
+                alert('请输入IP地址和端口号');
+                return;
+            }
+
+            try {
+                websocket = new WebSocket(`ws://${ip}:${port}`);
+                
+                websocket.onopen = () => {
+                    isConnected = true;
+                    updateConnectionStatus();
+                };
+
+                websocket.onerror = (error) => {
+                    console.error('连接错误:', error);
+                    isConnected = false;
+                    updateConnectionStatus();
+                };
+
+                websocket.onclose = () => {
+                    isConnected = false;
+                    updateConnectionStatus();
+                };
+
+                websocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.title === 'response_record') {
+                            handleRecordResponse(data);
+                        } else if (data.title === 'response_play') {
+                            handlePlayResponse(data);
+                        }
+                    } catch (e) {
+                        console.error('消息解析失败:', e);
+                    }
+                };
+
+            } catch (error) {
+                alert('连接失败: ' + error.message);
+                isConnected = false;
+                updateConnectionStatus();
+            }
+        }
+
+        function disconnect() {
+            if (websocket) {
+                websocket.close();
+                isConnected = false;
+                updateConnectionStatus();
+            }
+        }
+
+        function handleRecordResponse(data) {
+            const recordStatus = document.getElementById('recordStatus');
+            if (data.content.error_code === 2) {
+                if (lastRecordAction === 'start') {
+                    recordStatus.classList.add('active');
+                } else if (lastRecordAction === 'stop') {
+                    recordStatus.classList.remove('active');
+                }
+            }
+        }
+
+        function handlePlayResponse(data) {
+            const playStatus = document.getElementById('playStatus');
+            switch (data.content.error_code) {
+                case 2:
+                    if (lastPlayAction === 'start') {
+                        playStatus.classList.add('active');
+                    } else if (lastPlayAction === 'stop') {
+                        playStatus.classList.remove('active');
+                    }
+                    break;
+                case 3:
+                    playStatus.classList.add('active');
+                    break;
+                case 0:
+                    playStatus.classList.remove('active');
+                    break;
+            }
+        }
+
+        function validateInput() {
+            if (!isConnected) {
+                alert('请先连接服务器');
+                return false;
+            }
+            const fileName = document.getElementById('fileNameInput').value;
+            if (!fileName) {
+                alert('请输入文件名');
+                return false;
+            }
+            return true;
+        }
+
+        function sendStartRecord() {
+            if (!validateInput()) return;
+            
+			const fileName = formatFileName(document.getElementById('fileNameInput').value);
+			
+            const payload = {
+                title: "request_record",
+                content: {
+                    session_id: 10,
+                    action: 1,
+                    time: 0,
+                    file_name: fileName,
+                    aftertouch_threshold: 10
+                }
+            };
+            
+            lastRecordAction = 'start';
+            websocket.send(JSON.stringify(payload));
+        }
+
+        function sendStopRecord() {
+            if (!validateInput()) return;
+            
+			const fileName = formatFileName(document.getElementById('fileNameInput').value);
+			
+            const payload = {
+                title: "request_record",
+                content: {
+                    session_id: 10,
+                    action: 0,
+                    time: 0,
+                    file_name: fileName,
+                    aftertouch_threshold: 10
+                }
+            };
+            
+            lastRecordAction = 'stop';
+            websocket.send(JSON.stringify(payload));
+        }
+
+        function sendStartPlay() {
+            if (!validateInput()) return;
+            
+			const fileName = formatFileName(document.getElementById('fileNameInput').value);
+			
+            const payload = {
+                title: "request_play",
+                content: {
+                    session_id: 7,
+                    action: 1,
+                    play_speed: 0,
+                    file_name: fileName,
+                    volume: 100,
+                    time_start: 0,
+                    time_end: 4294967295
+                }
+            };
+            
+            lastPlayAction = 'start';
+            websocket.send(JSON.stringify(payload));
+        }
+
+        function sendStopPlay() {
+            if (!validateInput()) return;
+			
+			const fileName = formatFileName(document.getElementById('fileNameInput').value);
+            
+            const payload = {
+                title: "request_play",
+                content: {
+                    session_id: 7,
+                    action: 0,
+                    play_speed: 0,
+                    file_name: fileName,
+                    volume: 100,
+                    time_start: 0,
+                    time_end: 4294967295
+                }
+            };
+            
+            lastPlayAction = 'stop';
+            websocket.send(JSON.stringify(payload));
+        }
+    </script>
+</body>
+</html>
